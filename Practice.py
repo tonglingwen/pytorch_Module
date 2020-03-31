@@ -20,7 +20,7 @@ def parse_args():
     return args
 
 def transform(img):
-    img=img.resize((28, 28), Image.ANTIALIAS)
+    img=img.resize((224, 224), Image.ANTIALIAS)
     re=transforms.ToTensor()(img)
     return re
 
@@ -68,7 +68,8 @@ def train(net,train_loader,epoch,cuda=False):
             loss = F.nll_loss(out, target)
             net.zero_grad()     # zeroes the gradient buffers of all parameters
             optimizer.zero_grad()
-            print(ep,":",loss)
+            if batch_idx%50==0:
+                print(ep,":",loss)
             loss.backward()
             optimizer.step()
 
