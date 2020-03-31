@@ -15,6 +15,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='PyTorch_Module')
     parser.add_argument('--device', default='cpu', help='device')
     parser.add_argument('--module', default='testnet', help='module')
+    parser.add_argument('--epochs', default=1, help='epochs')
     args = parser.parse_args()
 
     return args
@@ -112,7 +113,7 @@ def main(args):
                                               shuffle=False)
     if args.device == 'gpu':
         net.cuda()
-    train(net,train_loader,1, args.device == 'gpu')
+    train(net,train_loader,args.epochs, args.device == 'gpu')
     test(net,train_loader,args.device == 'gpu')
 
 if __name__ == "__main__":
