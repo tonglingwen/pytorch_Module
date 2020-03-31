@@ -35,3 +35,6 @@ class TestNet(nn.Module):
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
         return F.log_softmax(x)
+
+    def input_size(self):
+        return [28,28]

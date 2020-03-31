@@ -232,3 +232,6 @@ class ResNet34(nn.Module):
         node17 = node17.view(node17.size(0), -1)
         re=self.fc(node17)
         return F.log_softmax(re)
+
+    def input_size(self):
+        return [224,224]

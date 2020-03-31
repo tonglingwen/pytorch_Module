@@ -16,24 +16,9 @@ def parse_args():
     parser.add_argument('--device', default='cpu', help='device')
     parser.add_argument('--module', default='testnet', help='module')
     parser.add_argument('--epochs', default=1, help='epochs')
+    parser.add_argument('--batch_size', default=16, help='batch_size')
     args = parser.parse_args()
-
     return args
-
-def transform(img):
-    img=img.resize((224, 224), Image.ANTIALIAS)
-    re=transforms.ToTensor()(img)
-    return re
-
-#net=ResNet34.ResNet34(1,10)
-
-
-batch_size = 16
-test_batch_size = 16
-
-
-
-
 
 
 
@@ -94,22 +79,23 @@ def main(args):
     if not net:
         print("choose a module please!")
         return 0
+    print(args)
     train_dataset = datasets.MNIST(root='./data/',
                                    train=True,
-                                   transform=transform,
+                                   transform=lambda img:transforms.ToTensor()(img.resize((net.input_size()[0], net.input_size()[1]), Image.ANTIALIAS)),
                                    download=True)
 
     test_dataset = datasets.MNIST(root='./data/',
                                   train=False,
-                                  transform=transform)
+                                  transform=lambda img:transforms.ToTensor()(img.resize((net.input_size()[0], net.input_size()[1]), Image.ANTIALIAS)))
 
     # Data Loader (Input Pipeline)
     train_loader = torch.utils.data.DataLoader(dataset=train_dataset,
-                                               batch_size=batch_size,
+                                               batch_size=args.batch_size,
                                                shuffle=True)
 
     test_loader = torch.utils.data.DataLoader(dataset=test_dataset,
-                                              batch_size=test_batch_size,
+                                              batch_size=args.batch_size,
                                               shuffle=False)
     if args.device == 'gpu':
         net.cuda()
