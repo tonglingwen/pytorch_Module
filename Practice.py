@@ -14,6 +14,7 @@ def parse_args():
     import argparse
     parser = argparse.ArgumentParser(description='PyTorch_Module')
     parser.add_argument('--device', default='cpu', help='device')
+    parser.add_argument('--module', default='testnet', help='module')
     args = parser.parse_args()
 
     return args
@@ -24,7 +25,7 @@ def transform(img):
     return re
 
 #net=ResNet34.ResNet34(1,10)
-net=TestNet.TestNet(1,10)
+
 
 batch_size = 64
 test_batch_size = 32
@@ -35,7 +36,7 @@ test_batch_size = 32
 
 
 
-def test(cuda=False):
+def test(net,test_loader,cuda=False):
     test_loss = 0
     correct = 0
     for data, target in test_loader:
@@ -56,7 +57,7 @@ def test(cuda=False):
         100. * correct / len(test_loader.dataset)))
 
 
-def train(epoch,cuda=False):
+def train(net,train_loader,epoch,cuda=False):
     optimizer = optim.SGD(net.parameters(), lr=0.01)
     for ep in range(epoch):
         for batch_idx, (data, target) in enumerate(train_loader):
@@ -81,9 +82,16 @@ def train(epoch,cuda=False):
 #torch.save(net, '\model.pkl')
 #torch.save(net.state_dict(), '\parameter.pkl')
 
+def main(args):
+    net = False
+    if args.module == 'testnet':
+        net = TestNet.TestNet(1, 10)
+    if args.module == 'resnet34':
+        net = ResNet34.ResNet34(1, 10)
 
-if __name__ == "__main__":
-    args = parse_args()
+    if not net:
+        print("choose a module please!")
+        return 0
     train_dataset = datasets.MNIST(root='./data/',
                                    train=True,
                                    transform=transform,
@@ -101,6 +109,11 @@ if __name__ == "__main__":
     test_loader = torch.utils.data.DataLoader(dataset=test_dataset,
                                               batch_size=test_batch_size,
                                               shuffle=False)
-                                              
-    train(1,args.device=='gpu')
-    test(args.device=='gpu')
+    if args.device == 'gpu':
+        net.cuda()
+    train(net,train_loader,1, args.device == 'gpu')
+    test(net,train_loader,args.device == 'gpu')
+
+if __name__ == "__main__":
+    args = parse_args()
+    main(args)
