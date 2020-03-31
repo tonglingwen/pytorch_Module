@@ -28,7 +28,7 @@ def transform(img):
 #net=ResNet34.ResNet34(1,10)
 
 
-batch_size = 64
+batch_size = 32
 test_batch_size = 32
 
 
