@@ -12,10 +12,17 @@ import math
 import sys
 import numpy as np
 import time
+import data.voc0712 as voc
+import torch.utils.data as data
 
 class SSD(nn.Module):
     def __init__(self):
         self.num_class=21
+        self.pos_iou=0.5
+        self.neg_iou=0.5
+        self.pos_neg_rate=3
+        self.prior_variances=[0.1,0.1,0.2,0.2]
+
         super(SSD, self).__init__()
         self.conv1=nn.Conv2d(3,32,3,2,1)
         self.batchnor1=nn.BatchNorm2d(32)
@@ -223,40 +230,226 @@ class SSD(nn.Module):
 
         return node6
 
-    def train(self, mode=True):
-        pri=self.pri.data
-        loc=self.loc.data
-        conf=self.conf.data
 
-        gd=torch.rand(1,1,34,8)
+    def jaccardOverlap_(self,bbox1,bbox2):
+        intersect_bbox = self.intersectBBox_(bbox1,bbox2)
+        intersect_width=intersect_bbox[2]-intersect_bbox[0]
+        intersect_height=intersect_bbox[3]-intersect_bbox[1]
 
-        all_gt_bboxes=self.getGroundTruth(gt_data=gd)
-        prior_bboxes,prior_variances=self.getPriorBBoxes(pri)
-        all_loc_preds=self.getLocPredictions(loc)
-        all_match_overlaps,all_match_indices_=self.findMatches(all_loc_preds=all_loc_preds,all_gt_bboxes=all_gt_bboxes,prior_bboxes=prior_bboxes,prior_variances=prior_variances,params=None)
-        neg_indices,num_poses,num_neges=self.getNegsamples(all_match_overlaps,conf,all_gt_bboxes,all_match_indices_)
+        if intersect_height>0 and intersect_width>0:
+            intersect_size=intersect_width*intersect_height
+            bbox1_size=self.bboxsize_(bbox1)
+            bbox2_size=self.bboxsize_(bbox2)
+            return intersect_size/(bbox1_size+bbox2_size-intersect_size)
+        else:
+            return 0.0
+        return
 
-        loc_pred_data = torch.zeros(1,num_poses*4,requires_grad=True);
-        loc_gt_data = torch.zeros(1,num_poses*4);
-        self.encodeLocPrediction(all_loc_preds=all_loc_preds,all_gt_bboxes=all_gt_bboxes,all_match_indices=all_match_indices_,prior_bboxes=prior_bboxes,prior_variances=prior_variances,loc_pred_data=loc_pred_data.data,loc_gt_data=loc_gt_data.data)
+    def intersectBBox_(self,bbox1,bbox2):
+        re=torch.zeros(4)
+        xmin1 = bbox1[0]
+        ymin1 = bbox1[1]
+        xmax1 = bbox1[2]
+        ymax1 = bbox1[3]
 
-        conf_pred_data = torch.zeros(num_poses+num_neges,self.num_class,requires_grad=True);
-        conf_gt_data = torch.zeros(num_poses+num_neges);
-        self.encodeConfPrediction(conf_data=conf,all_match_indices=all_match_indices_,all_neg_indices=neg_indices,all_gt_bboxes=all_gt_bboxes,conf_pred_data=conf_pred_data.data,conf_gt_data=conf_gt_data.data)
+        xmin2 = bbox2[0]
+        ymin2 = bbox2[1]
+        xmax2 = bbox2[2]
+        ymax2 = bbox2[3]
 
-        loss=F.nll_loss(F.log_softmax(conf_pred_data),conf_gt_data.long())+F.smooth_l1_loss(loc_pred_data,loc_gt_data)
-        loss.backward()
+        if xmin2>xmax1 or xmax2<xmin1 or ymin2>ymax1 or ymax2<ymin1:
+            pass
+        else:
+            re[0] = max([xmin1, xmin2])
+            re[1] = max([ymin1, ymin2])
+            re[2] = min([xmax1, xmax2])
+            re[3] = min([ymax1, ymax2])
+        return re
 
-        loc_pred_data_grad=torch.zeros(loc.shape)
-        conf_pred_data_grad=torch.zeros(conf.shape)
+    def bboxsize_(self,bbox):
+        if bbox[2]<bbox[0] or bbox[3]<bbox[1]:
+            return 0
+        width=bbox[2]-bbox[0]
+        height=bbox[3]-bbox[1]
+        return width*height
 
-        self.reset(all_match_indices_=all_match_indices_,neg_indices=neg_indices,loc_pred_data_grad=loc_pred_data_grad,conf_pred_data_grad=conf_pred_data_grad,loc_pred_data_ori_grad=loc_pred_data.grad,conf_pred_data_ori_grad=conf_pred_data.grad)
+    def creatGlobalIndex(self,prior_boxes,gt_value):
+        pos_count=neg_cout=neg_all_count = 0
+        pos_indics =[]
+        distri_frame = torch.ones((len(gt_value),(int)(prior_boxes.shape[2]/4)),dtype=torch.int)*-1
 
-        asd=loc_pred_data_grad[loc_pred_data_grad!=0]
-        asd=conf_pred_data_grad[conf_pred_data_grad!=0]
+        for i in range(distri_frame.shape[0]):
+            pos_indic = []
+            for j in range(distri_frame.shape[1]):
+                max_iou=-1
+                max_id=0
+                neg=False
+                for n in range(gt_value[i].shape[0]):
+                    iou=self.jaccardOverlap_(gt_value[i][n,0:4],prior_boxes[0,0,4*j:4*j+4])
+                    if iou>self.pos_iou:
+                        max_iou=max(iou, max_iou)
+                        max_id=n
+                    if iou<self.neg_iou:
+                        neg=True
+                if max_iou>-1:
+                    distri_frame[i,j]=max_id
+                    pos_count=pos_count+1
+                    pos_indic.append(j)
+                elif neg:
+                    distri_frame[i,j]=-2
+                    neg_all_count=neg_all_count+1
+            pos_indics.append(pos_indic)
+        neg_cout=min(neg_all_count,pos_count*self.pos_neg_rate)
+        return distri_frame,pos_indics,pos_count,neg_cout,neg_all_count
 
-        self.loc.backward(loc_pred_data_grad,retain_graph=True)
-        self.conf.backward(conf_pred_data_grad)
+    def encodeBBox_(self, prior_bbox, bbox):
+        res = torch.zeros(4)
+        prior_width = prior_bbox[2] - prior_bbox[0]
+        prior_height = prior_bbox[3] - prior_bbox[1]
+        prior_center_x = (prior_bbox[0] + prior_bbox[2]) / 2
+        prior_center_y = (prior_bbox[1] + prior_bbox[3]) / 2
+
+        bbox_width = bbox[2] - bbox[0]
+        bbox_height = bbox[3] - bbox[1]
+        bbox_center_x = (bbox[0] + bbox[2]) / 2
+        bbox_center_y = (bbox[1] + bbox[3]) / 2
+
+        res[0] = (bbox_center_x - prior_center_x) / prior_width /self.prior_variances[0]
+        res[1] = (bbox_center_y - prior_center_y) / prior_height /self.prior_variances[1]
+        res[2] = math.log(bbox_width / prior_width) /self.prior_variances[2]
+        res[3] = math.log(bbox_height / prior_height) /self.prior_variances[3]
+
+        return res
+
+    def creatPositiveSample(self,distri_frame,pos_indics,gt_value,loc,conf,pos_count,prior_boxes):
+        pos_loc_target=torch.zeros(pos_count*4)
+        pos_conf_target=torch.zeros(pos_count*self.num_class)
+        pos_loc_pre=torch.zeros(pos_count*4)
+        pos_conf_pre=torch.zeros(pos_count*self.num_class)
+
+        count=0
+        for i in range(len(pos_indics)):
+            for j in range(len(pos_indics[i])):
+                pos_idx = pos_indics[i][j]
+                gt_idx=distri_frame[i,pos_idx]
+
+                # create loc
+                for n in range(4):
+                    pos_loc_pre[4*count+n]=loc[i,4*pos_idx+n]
+                target=self.encodeBBox_(prior_bbox=prior_boxes[0, 0, 4*pos_idx:4 * pos_idx + 4],bbox=gt_value[i][gt_idx, 0:4])
+                for n in range(4):
+                    pos_loc_target[4*count+n]=target[n]
+
+                # create conf
+                for n in range(self.num_class):
+                    pos_conf_pre[self.num_class*count+n]=conf[i,self.num_class*pos_idx+n]
+                label=(int)(gt_value[i][gt_idx,4]+1)  #background is 0
+                for n in range(self.num_class):
+                    pos_conf_target[self.num_class*count+n]=1 if(n==label) else 0
+                count=count+1
+        #pos_loc_target, pos_conf_target, pos_loc_pre, pos_conf_pre=0
+        return pos_loc_target,pos_conf_target,pos_loc_pre,pos_conf_pre
+
+    def creatNegativeSample(self,distri_frame,conf,neg_cout,neg_all_count):
+        # code1: evaluate score
+        scores=torch.zeros(neg_all_count,3)
+        neg_conf_target=torch.zeros(self.num_class*neg_cout)
+        neg_conf_pre=torch.zeros(self.num_class*neg_cout)
+        neg_indics=[]
+        count=0
+        for i in range(distri_frame.shape[0]):
+            neg_indics.append([])
+            for j in range(distri_frame.shape[1]):
+                if distri_frame[i,j]<-1:#indicate it is neg_sample
+                    sin_conf=conf[i,self.num_class*j:self.num_class*j+self.num_class].softmax(0)[0]
+                    scores[count,0]=sin_conf
+                    scores[count,1]=i
+                    scores[count,2]=j
+                    count=count+1
+        scores=scores.sort(0,descending=True).values
+        count=0
+        for i in range(neg_cout):
+            batch_id=(int)(scores[i,1])
+            loc_id=(int)(scores[i,2])
+            for j in range(self.num_class):
+                neg_conf_pre[self.num_class*count+j]=conf[batch_id,self.num_class*loc_id+j]
+            neg_indics[batch_id].append(loc_id)
+            count=count+1
+        return neg_conf_target,neg_conf_pre,neg_indics
+
+    def train(self,data_loader,mode=True):
+        # data.DataLoader
+        batch_iterator = iter(data_loader)
+        images, targets = next(batch_iterator)
+        for i in range(10000):
+            self.forward(images)
+            pri = self.pri.data
+            loc = self.loc.data
+            conf = self.conf.data
+            images, targets = next(batch_iterator)
+            #print(targets)
+
+            distri_frame,pos_indics,pos_count,neg_cout,neg_all_count=self.creatGlobalIndex(prior_boxes=pri,gt_value=targets)
+            pos_loc_target,pos_conf_target,pos_loc_pre,pos_conf_pre=self.creatPositiveSample(distri_frame=distri_frame,pos_indics=pos_indics,gt_value=targets,loc=loc,conf=conf,pos_count=pos_count,prior_boxes=pri)
+            neg_conf_target,neg_conf_pre,neg_indics=self.creatNegativeSample(distri_frame=distri_frame,conf=conf,neg_cout=neg_cout,neg_all_count=neg_all_count)
+
+            conf_target=torch.zeros(pos_conf_target.shape[0]+neg_conf_target.shape[0])
+            conf_pre=torch.zeros(pos_conf_pre.shape[0]+neg_conf_pre.shape[0])
+            loc_target=torch.zeros(pos_loc_target.shape)
+            loc_pre=torch.zeros(pos_loc_pre.shape)
+
+
+            torch.cat([pos_conf_target,neg_conf_target],0,out=conf_target.data)
+            torch.cat([pos_conf_pre, neg_conf_pre], 0, out=conf_pre.data)
+            torch.cat([pos_loc_target],0,out=loc_target.data)
+            torch.cat([pos_loc_pre],0,out=loc_pre.data)
+
+
+            loss = F.nll_loss(F.log_softmax(conf_pre), conf_target.long()) + F.smooth_l1_loss(loc_pre,loc_target)
+            loss.backward()
+
+            loc_pred_data_grad = torch.zeros(loc.shape)
+            conf_pred_data_grad = torch.zeros(conf.shape)
+            '''
+            self.reset(all_match_indices_=all_match_indices_, neg_indices=neg_indices,
+                       loc_pred_data_grad=loc_pred_data_grad, conf_pred_data_grad=conf_pred_data_grad,
+                       loc_pred_data_ori_grad=loc_pred_data.grad, conf_pred_data_ori_grad=conf_pred_data.grad)
+
+            asd = loc_pred_data_grad[loc_pred_data_grad != 0]
+            asd = conf_pred_data_grad[conf_pred_data_grad != 0]
+
+            self.loc.backward(loc_pred_data_grad, retain_graph=True)
+            self.conf.backward(conf_pred_data_grad)
+            '''
+            '''
+            all_gt_bboxes=self.getGroundTruth(gt_data=targets)
+            prior_bboxes,prior_variances=self.getPriorBBoxes(pri)
+            all_loc_preds=self.getLocPredictions(loc)
+            all_match_overlaps,all_match_indices_=self.findMatches(all_loc_preds=all_loc_preds,all_gt_bboxes=all_gt_bboxes,prior_bboxes=prior_bboxes,prior_variances=prior_variances,params=None)
+            neg_indices,num_poses,num_neges=self.getNegsamples(all_match_overlaps,conf,all_gt_bboxes,all_match_indices_)
+
+            loc_pred_data = torch.zeros(1,num_poses*4,requires_grad=True);
+            loc_gt_data = torch.zeros(1,num_poses*4);
+            self.encodeLocPrediction(all_loc_preds=all_loc_preds,all_gt_bboxes=all_gt_bboxes,all_match_indices=all_match_indices_,prior_bboxes=prior_bboxes,prior_variances=prior_variances,loc_pred_data=loc_pred_data.data,loc_gt_data=loc_gt_data.data)
+
+            conf_pred_data = torch.zeros(num_poses+num_neges,self.num_class,requires_grad=True);
+            conf_gt_data = torch.zeros(num_poses+num_neges);
+            self.encodeConfPrediction(conf_data=conf,all_match_indices=all_match_indices_,all_neg_indices=neg_indices,all_gt_bboxes=all_gt_bboxes,conf_pred_data=conf_pred_data.data,conf_gt_data=conf_gt_data.data)
+
+            loss=F.nll_loss(F.log_softmax(conf_pred_data),conf_gt_data.long())+F.smooth_l1_loss(loc_pred_data,loc_gt_data)
+            loss.backward()
+
+            loc_pred_data_grad=torch.zeros(loc.shape)
+            conf_pred_data_grad=torch.zeros(conf.shape)
+
+            self.reset(all_match_indices_=all_match_indices_,neg_indices=neg_indices,loc_pred_data_grad=loc_pred_data_grad,conf_pred_data_grad=conf_pred_data_grad,loc_pred_data_ori_grad=loc_pred_data.grad,conf_pred_data_ori_grad=conf_pred_data.grad)
+
+            asd=loc_pred_data_grad[loc_pred_data_grad!=0]
+            asd=conf_pred_data_grad[conf_pred_data_grad!=0]
+
+            self.loc.backward(loc_pred_data_grad,retain_graph=True)
+            self.conf.backward(conf_pred_data_grad)
+            '''
         return
 
     def reset(self,all_match_indices_,neg_indices,loc_pred_data_grad,conf_pred_data_grad,loc_pred_data_ori_grad,conf_pred_data_ori_grad):
@@ -598,22 +791,35 @@ class SSD(nn.Module):
 
     def getGroundTruth(self,gt_data):
         re={}
-        for i in range(gt_data.shape[2]):
-            start_idx=0
-            item_id=int(gt_data[0,0,i,start_idx].item())
-            if item_id==-1:
-                continue
-            label=gt_data[0,0,i,start_idx+1]
-            difficult=(True if(gt_data[0,0,i,start_idx+7]>=1) else False)
-            bbox=torch.zeros(1,8)
-            bbox[0,0]=label
-            bbox[0, 1] = gt_data[0,0,i,start_idx+3]
-            bbox[0, 2] = gt_data[0,0,i,start_idx+4]
-            bbox[0, 3] = gt_data[0,0,i,start_idx+5]
-            bbox[0, 4] = gt_data[0,0,i,start_idx+6]
-            bbox[0, 5] = gt_data[0,0,i,start_idx+7]
-            bbox[0, 6] = self.bboxsize(bbox)
-            re.setdefault(item_id,[]).append(bbox)
+        for i in range(len(gt_data)):
+            item_id=i
+            for j in range(gt_data[i].shape[0]):
+                bbox = torch.zeros(1, 8)
+                bbox[0,0]=gt_data[i][j,4]+1
+                bbox[0, 1] = gt_data[i][j,0]+1
+                bbox[0, 2] = gt_data[i][j,1]+1
+                bbox[0, 3] = gt_data[i][j,2]+1
+                bbox[0, 4] = gt_data[i][j,3]+1
+                bbox[0, 6] = self.bboxsize(bbox)
+                re.setdefault(item_id,[]).append(bbox)
+
+        # re={}
+        # for i in range(gt_data.shape[2]):
+        #     start_idx=0
+        #     item_id=int(gt_data[0,0,i,start_idx].item())
+        #     if item_id==-1:
+        #         continue
+        #     label=gt_data[0,0,i,start_idx+1]
+        #     difficult=(True if(gt_data[0,0,i,start_idx+7]>=1) else False)
+        #     bbox=torch.zeros(1,8)
+        #     bbox[0,0]=label
+        #     bbox[0, 1] = gt_data[0,0,i,start_idx+3]
+        #     bbox[0, 2] = gt_data[0,0,i,start_idx+4]
+        #     bbox[0, 3] = gt_data[0,0,i,start_idx+5]
+        #     bbox[0, 4] = gt_data[0,0,i,start_idx+6]
+        #     bbox[0, 5] = gt_data[0,0,i,start_idx+7]
+        #     bbox[0, 6] = self.bboxsize(bbox)
+        #     re.setdefault(item_id,[]).append(bbox)
         return re
 
     def bboxsize(self,bbox):
@@ -712,16 +918,21 @@ class SSD(nn.Module):
 #conf_data  16*40257
 #prior_data 1*2*7668
 #gt_data    1*1*37*8
+if __name__ == '__main__':
+    ds = voc.VOCDetection('E:\VOC027\VOCdevkit\VOCdevkit',
+                          transform=voc.SSDAugmentation())
+    data_loader = data.DataLoader(ds, 16, num_workers=4, shuffle=True, collate_fn=voc.detection_collate)
 
-print(time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time())))
-net=SSD()
-input=torch.rand(1,3,300,300)
-net(input)
-net.train()
+    print(time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time())))
+    net=SSD()
+    #input=torch.rand(3,3,300,300)
+    net.train(data_loader=data_loader)
 #make_dot(net(input)).view()
 #flops, params = profile(net, inputs=(input, ))
 
 #torch.save(net, '\model.pkl')
-print(time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time())))
-summary(net, input_size=(3, 300, 300))
-print(time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time())))
+    print(time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time())))
+    summary(net, input_size=(3, 300, 300))
+    print(time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time())))
+
+
