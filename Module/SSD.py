@@ -273,10 +273,28 @@ class SSD(nn.Module):
         height=bbox[3]-bbox[1]
         return width*height
 
+    def bboxsize__(self,bbox):
+        res=torch.zeros(bbox.shape[0])
+        c=bbox.clone().detach()
+        mask=((c[:,2]<c[:,0])+(c[:,3]<c[:,1]))>=1
+        mask=mask.view(-1,1)
+        mask=mask.expand_as(c)
+        c[mask]=0
+        return (c[:,2]-c[:,0])*(c[:,3]-c[:,1])
+
+    def jaccardOverlap__(self,gt_value,prior_boxes):
+        self.bboxsize__(prior_boxes)
+        return
+
     def creatGlobalIndex(self,prior_boxes,gt_value):
         pos_count=neg_cout=neg_all_count = 0
         pos_indics =[]
         distri_frame = torch.ones((len(gt_value),(int)(prior_boxes.shape[2]/4)),dtype=torch.int)*-1
+        pri = prior_boxes[0, 0, :].view(-1, 4)
+        for i in range(distri_frame.shape[0]):
+            for n in range(gt_value[i].shape[0]):
+                self.jaccardOverlap__(prior_boxes=pri,gt_value=gt_value[i][n,0:4])
+
 
         for i in range(distri_frame.shape[0]):
             pos_indic = []
