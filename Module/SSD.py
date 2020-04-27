@@ -273,6 +273,24 @@ class SSD(nn.Module):
         height=bbox[3]-bbox[1]
         return width*height
 
+
+    def intersectBBox__(self, bbox1, bbox2):
+        res = bbox1.clone().detach()
+
+        re0=res[:,0]
+        re0[re0<bbox2[0]]=bbox2[0]
+
+        re1=res[:,1]
+        re1[re1<bbox2[1]]=bbox2[1]
+
+        re2=res[:,2]
+        re2[re2>bbox2[2]]=bbox2[2]
+
+        re3=res[:,3]
+        re3[re3>bbox2[3]]=bbox2[3]
+
+        return res
+
     def bboxsize__(self,bbox):
         res=torch.zeros(bbox.shape[0])
         c=bbox.clone().detach()
@@ -282,43 +300,85 @@ class SSD(nn.Module):
         c[mask]=0
         return (c[:,2]-c[:,0])*(c[:,3]-c[:,1])
 
-    def jaccardOverlap__(self,gt_value,prior_boxes):
-        self.bboxsize__(prior_boxes)
-        return
+    def jaccardOverlap__(self,prior_boxes,gt_value):
+        intersect_bbox=self.intersectBBox__(prior_boxes,gt_value)
+        intersect_width=intersect_bbox[:,2]-intersect_bbox[:,0]
+        intersect_height=intersect_bbox[:,3]-intersect_bbox[:,1]
+
+        intersect_size=intersect_width*intersect_height
+
+        mask=(intersect_height<=0)
+        mask[intersect_width<=0]=1
+
+        bbox1_size=self.bboxsize__(prior_boxes)
+        bbox2_size=self.bboxsize_(gt_value)
+
+        res=intersect_size/(bbox1_size+bbox2_size-intersect_size)
+        res[mask]=0
+
+        return res
 
     def creatGlobalIndex(self,prior_boxes,gt_value):
-        pos_count=neg_cout=neg_all_count = 0
-        pos_indics =[]
-        distri_frame = torch.ones((len(gt_value),(int)(prior_boxes.shape[2]/4)),dtype=torch.int)*-1
+        pos_frame = torch.zeros((len(gt_value), (int)(prior_boxes.shape[2] / 4)), dtype=torch.uint8)
+        pos_gt_value = torch.zeros((len(gt_value), (int)(prior_boxes.shape[2] / 4),5))
+        pos_pri_value = torch.zeros((len(gt_value), (int)(prior_boxes.shape[2] / 4), 4))
+        neg_frame = torch.zeros((len(gt_value), (int)(prior_boxes.shape[2] / 4)), dtype=torch.uint8)
+
         pri = prior_boxes[0, 0, :].view(-1, 4)
-        for i in range(distri_frame.shape[0]):
+        for i in range(len(gt_value)):
+            max_iou=torch.ones(pri.shape[0])*-1
+            max_id=torch.zeros(pri.shape[0],5)
+            min_iou=torch.ones(pri.shape[0])*100
+
             for n in range(gt_value[i].shape[0]):
-                self.jaccardOverlap__(prior_boxes=pri,gt_value=gt_value[i][n,0:4])
+                iou=self.jaccardOverlap__(prior_boxes=pri,gt_value=gt_value[i][n,0:4])
+                mask=max_iou<iou
+                max_iou[mask]=iou[mask]
+                mask_id=mask.unsqueeze(mask.dim()).expand_as(max_id)
+                sum=mask.sum()
+                if sum>0:
+                    max_id[mask_id]=gt_value[i][n,:].repeat(sum)
+                mask=min_iou>iou
+                min_iou[mask]=iou[mask]
+            mask=max_iou>self.pos_iou
+            pos_frame[i,:]=mask
+            neg_frame[i,:]=min_iou<self.neg_iou
+            neg_frame[i,:][mask]=0
 
+            mask_id=mask.unsqueeze(mask.dim()).expand_as(max_id)
+            pos_gt_value[i,:][mask_id]=max_id[mask_id]
 
-        for i in range(distri_frame.shape[0]):
-            pos_indic = []
-            for j in range(distri_frame.shape[1]):
-                max_iou=-1
-                max_id=0
-                neg=False
-                for n in range(gt_value[i].shape[0]):
-                    iou=self.jaccardOverlap_(gt_value[i][n,0:4],prior_boxes[0,0,4*j:4*j+4])
-                    if iou>self.pos_iou:
-                        max_iou=max(iou, max_iou)
-                        max_id=n
-                    if iou<self.neg_iou:
-                        neg=True
-                if max_iou>-1:
-                    distri_frame[i,j]=max_id
-                    pos_count=pos_count+1
-                    pos_indic.append(j)
-                elif neg:
-                    distri_frame[i,j]=-2
-                    neg_all_count=neg_all_count+1
-            pos_indics.append(pos_indic)
-        neg_cout=min(neg_all_count,pos_count*self.pos_neg_rate)
-        return distri_frame,pos_indics,pos_count,neg_cout,neg_all_count
+            mask_pri = mask.unsqueeze(mask.dim()).expand_as(pri)
+            pos_pri_value[i, :][mask_pri] = pri[mask_pri]
+
+        # for i in range(distri_frame.shape[0]):
+        #     pos_indic = []
+        #     for j in range(distri_frame.shape[1]):
+        #         max_iou=-1
+        #         max_id=0
+        #         neg=False
+        #         for n in range(gt_value[i].shape[0]):
+        #             iou=self.jaccardOverlap_(gt_value[i][n,0:4],prior_boxes[0,0,4*j:4*j+4])
+        #             if iou>self.pos_iou:
+        #                 max_iou=max(iou, max_iou)
+        #                 max_id=n
+        #             if iou<self.neg_iou:
+        #                 neg=True
+        #         if max_iou>-1:
+        #             distri_frame[i,j]=max_id
+        #             pos_count=pos_count+1
+        #             pos_indic.append(j)
+        #         elif neg:
+        #             distri_frame[i,j]=-2
+        #             neg_all_count=neg_all_count+1
+        #     pos_indics.append(pos_indic)
+        # neg_cout=min(neg_all_count,pos_count*self.pos_neg_rate)
+        # distri_frame[distri_frame>0]=1
+        # distri_frame[distri_frame<0]=0
+        # ssd=distri_frame.sum()
+
+        return pos_frame,pos_gt_value,pos_pri_value,neg_frame
+
 
     def encodeBBox_(self, prior_bbox, bbox):
         res = torch.zeros(4)
@@ -339,32 +399,66 @@ class SSD(nn.Module):
 
         return res
 
-    def creatPositiveSample(self,distri_frame,pos_indics,gt_value,loc,conf,pos_count,prior_boxes):
-        pos_loc_target=torch.zeros(pos_count*4)
-        pos_conf_target=torch.zeros(pos_count*self.num_class)
-        pos_loc_pre=torch.zeros(pos_count*4)
-        pos_conf_pre=torch.zeros(pos_count*self.num_class)
+    def encodeBBox__(self, prior_bbox, bbox):
+        res = torch.zeros(bbox.shape)
+        prior_width = prior_bbox[:,2] - prior_bbox[:,0]
+        prior_height = prior_bbox[:,3] - prior_bbox[:,1]
+        prior_center_x = (prior_bbox[:,0] + prior_bbox[0,2]) / 2
+        prior_center_y = (prior_bbox[:,1] + prior_bbox[:,3]) / 2
 
-        count=0
-        for i in range(len(pos_indics)):
-            for j in range(len(pos_indics[i])):
-                pos_idx = pos_indics[i][j]
-                gt_idx=distri_frame[i,pos_idx]
+        bbox_width = bbox[:,2] - bbox[:,0]
+        bbox_height = bbox[:,3] - bbox[:,1]
+        bbox_center_x = (bbox[:,0] + bbox[:,2]) / 2
+        bbox_center_y = (bbox[:,1] + bbox[:,3]) / 2
 
-                # create loc
-                for n in range(4):
-                    pos_loc_pre[4*count+n]=loc[i,4*pos_idx+n]
-                target=self.encodeBBox_(prior_bbox=prior_boxes[0, 0, 4*pos_idx:4 * pos_idx + 4],bbox=gt_value[i][gt_idx, 0:4])
-                for n in range(4):
-                    pos_loc_target[4*count+n]=target[n]
+        res[:,0] = (bbox_center_x - prior_center_x) / prior_width /self.prior_variances[0]
+        res[:,1] = (bbox_center_y - prior_center_y) / prior_height /self.prior_variances[1]
+        res[:,2] = ((bbox_width / prior_width) /self.prior_variances[2]).log()
+        res[:,3] = ((bbox_height / prior_height) /self.prior_variances[3]).log()
 
-                # create conf
-                for n in range(self.num_class):
-                    pos_conf_pre[self.num_class*count+n]=conf[i,self.num_class*pos_idx+n]
-                label=(int)(gt_value[i][gt_idx,4]+1)  #background is 0
-                for n in range(self.num_class):
-                    pos_conf_target[self.num_class*count+n]=1 if(n==label) else 0
-                count=count+1
+        return res
+
+    def creatPositiveSample(self,pos_frame,pos_gt_value,pos_pri_value,loc,conf):
+        loc=loc.view(loc.shape[0],-1,4)
+        conf=conf.view(conf.shape[0],-1,self.num_class)
+        pos_frame_pri=pos_frame.unsqueeze(pos_frame.dim()).expand_as(pos_pri_value)
+        pos_frame_gt = pos_frame.unsqueeze(pos_frame.dim()).expand_as(pos_gt_value)
+        pos_frame_conf=pos_frame.unsqueeze(pos_frame.dim()).expand_as(conf)
+
+        pri=pos_pri_value[pos_frame_pri].view(-1,4)
+        gt=pos_gt_value[pos_frame_gt].view(-1,5)
+
+        pos_loc_target=self.encodeBBox__(prior_bbox=pri,bbox=gt[:,0:4])
+        pos_loc_pre=loc[pos_frame_pri].view(-1,4)
+
+        pos_conf_target=gt[:,4]+1
+        pos_conf_pre=conf[pos_frame_conf].view(-1,self.num_class)
+
+        # pos_loc_target=torch.zeros(pos_count*4)
+        # pos_conf_target=torch.zeros(pos_count*self.num_class)
+        # pos_loc_pre=torch.zeros(pos_count*4)
+        # pos_conf_pre=torch.zeros(pos_count*self.num_class)
+        #
+        # count=0
+        # for i in range(len(pos_indics)):
+        #     for j in range(len(pos_indics[i])):
+        #         pos_idx = pos_indics[i][j]
+        #         gt_idx=distri_frame[i,pos_idx]
+        #
+        #         # create loc
+        #         for n in range(4):
+        #             pos_loc_pre[4*count+n]=loc[i,4*pos_idx+n]
+        #         target=self.encodeBBox_(prior_bbox=prior_boxes[0, 0, 4*pos_idx:4 * pos_idx + 4],bbox=gt_value[i][gt_idx, 0:4])
+        #         for n in range(4):
+        #             pos_loc_target[4*count+n]=target[n]
+        #
+        #         # create conf
+        #         for n in range(self.num_class):
+        #             pos_conf_pre[self.num_class*count+n]=conf[i,self.num_class*pos_idx+n]
+        #         label=(int)(gt_value[i][gt_idx,4]+1)  #background is 0
+        #         for n in range(self.num_class):
+        #             pos_conf_target[self.num_class*count+n]=1 if(n==label) else 0
+        #         count=count+1
         #pos_loc_target, pos_conf_target, pos_loc_pre, pos_conf_pre=0
         return pos_loc_target,pos_conf_target,pos_loc_pre,pos_conf_pre
 
@@ -407,8 +501,10 @@ class SSD(nn.Module):
             images, targets = next(batch_iterator)
             #print(targets)
 
-            distri_frame,pos_indics,pos_count,neg_cout,neg_all_count=self.creatGlobalIndex(prior_boxes=pri,gt_value=targets)
-            pos_loc_target,pos_conf_target,pos_loc_pre,pos_conf_pre=self.creatPositiveSample(distri_frame=distri_frame,pos_indics=pos_indics,gt_value=targets,loc=loc,conf=conf,pos_count=pos_count,prior_boxes=pri)
+            pos_frame,pos_gt_value,pos_pri_value,neg_frame=self.creatGlobalIndex(prior_boxes=pri,gt_value=targets)
+
+            pos_loc_target,pos_conf_target,pos_loc_pre,pos_conf_pre=self.creatPositiveSample(pos_frame=pos_frame,pos_gt_value=pos_gt_value,pos_pri_value=pos_pri_value,loc=loc,conf=conf)
+
             neg_conf_target,neg_conf_pre,neg_indics=self.creatNegativeSample(distri_frame=distri_frame,conf=conf,neg_cout=neg_cout,neg_all_count=neg_all_count)
 
             conf_target=torch.zeros(pos_conf_target.shape[0]+neg_conf_target.shape[0])
