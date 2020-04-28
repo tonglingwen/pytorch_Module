@@ -319,37 +319,38 @@ class SSD(nn.Module):
         return res
 
     def creatGlobalIndex(self,prior_boxes,gt_value):
-        pos_frame = torch.zeros((len(gt_value), (int)(prior_boxes.shape[2] / 4)), dtype=torch.uint8)
-        pos_gt_value = torch.zeros((len(gt_value), (int)(prior_boxes.shape[2] / 4),5))
-        pos_pri_value = torch.zeros((len(gt_value), (int)(prior_boxes.shape[2] / 4), 4))
-        neg_frame = torch.zeros((len(gt_value), (int)(prior_boxes.shape[2] / 4)), dtype=torch.uint8)
+        with torch.no_grad():
+            pos_frame = torch.zeros((len(gt_value), (int)(prior_boxes.shape[2] / 4)), dtype=torch.uint8)
+            pos_gt_value = torch.zeros((len(gt_value), (int)(prior_boxes.shape[2] / 4),5))
+            pos_pri_value = torch.zeros((len(gt_value), (int)(prior_boxes.shape[2] / 4), 4))
+            neg_frame = torch.zeros((len(gt_value), (int)(prior_boxes.shape[2] / 4)), dtype=torch.uint8)
 
-        pri = prior_boxes[0, 0, :].view(-1, 4)
-        for i in range(len(gt_value)):
-            max_iou=torch.ones(pri.shape[0])*-1
-            max_id=torch.zeros(pri.shape[0],5)
-            min_iou=torch.ones(pri.shape[0])*100
+            pri = prior_boxes[0, 0, :].view(-1, 4)
+            for i in range(len(gt_value)):
+                max_iou=torch.ones(pri.shape[0])*-1
+                max_id=torch.zeros(pri.shape[0],5)
+                min_iou=torch.ones(pri.shape[0])*100
 
-            for n in range(gt_value[i].shape[0]):
-                iou=self.jaccardOverlap__(prior_boxes=pri,gt_value=gt_value[i][n,0:4])
-                mask=max_iou<iou
-                max_iou[mask]=iou[mask]
+                for n in range(gt_value[i].shape[0]):
+                    iou=self.jaccardOverlap__(prior_boxes=pri,gt_value=gt_value[i][n,0:4])
+                    mask=max_iou<iou
+                    max_iou[mask]=iou[mask]
+                    mask_id=mask.unsqueeze(mask.dim()).expand_as(max_id)
+                    sum=mask.sum()
+                    if sum>0:
+                        max_id[mask_id]=gt_value[i][n,:].repeat(sum)
+                    mask=min_iou>iou
+                    min_iou[mask]=iou[mask]
+                mask=max_iou>self.pos_iou
+                pos_frame[i,:]=mask
+                neg_frame[i,:]=min_iou<self.neg_iou
+                neg_frame[i,:][mask]=0
+
                 mask_id=mask.unsqueeze(mask.dim()).expand_as(max_id)
-                sum=mask.sum()
-                if sum>0:
-                    max_id[mask_id]=gt_value[i][n,:].repeat(sum)
-                mask=min_iou>iou
-                min_iou[mask]=iou[mask]
-            mask=max_iou>self.pos_iou
-            pos_frame[i,:]=mask
-            neg_frame[i,:]=min_iou<self.neg_iou
-            neg_frame[i,:][mask]=0
+                pos_gt_value[i,:][mask_id]=max_id[mask_id]
 
-            mask_id=mask.unsqueeze(mask.dim()).expand_as(max_id)
-            pos_gt_value[i,:][mask_id]=max_id[mask_id]
-
-            mask_pri = mask.unsqueeze(mask.dim()).expand_as(pri)
-            pos_pri_value[i, :][mask_pri] = pri[mask_pri]
+                mask_pri = mask.unsqueeze(mask.dim()).expand_as(pri)
+                pos_pri_value[i, :][mask_pri] = pri[mask_pri]
 
         # for i in range(distri_frame.shape[0]):
         #     pos_indic = []
@@ -419,14 +420,15 @@ class SSD(nn.Module):
         return res
 
     def creatPositiveSample(self,pos_frame,pos_gt_value,pos_pri_value,loc,conf):
-        loc=loc.view(loc.shape[0],-1,4)
-        conf=conf.view(conf.shape[0],-1,self.num_class)
-        pos_frame_pri=pos_frame.unsqueeze(pos_frame.dim()).expand_as(pos_pri_value)
-        pos_frame_gt = pos_frame.unsqueeze(pos_frame.dim()).expand_as(pos_gt_value)
-        pos_frame_conf=pos_frame.unsqueeze(pos_frame.dim()).expand_as(conf)
+        loc = loc.view(loc.shape[0], -1, 4)
+        conf = conf.view(conf.shape[0], -1, self.num_class)
+        with torch.no_grad():
+            pos_frame_pri=pos_frame.unsqueeze(pos_frame.dim()).expand_as(pos_pri_value)
+            pos_frame_gt = pos_frame.unsqueeze(pos_frame.dim()).expand_as(pos_gt_value)
+            pos_frame_conf=pos_frame.unsqueeze(pos_frame.dim()).expand_as(conf)
 
-        pri=pos_pri_value[pos_frame_pri].view(-1,4)
-        gt=pos_gt_value[pos_frame_gt].view(-1,5)
+            pri=pos_pri_value[pos_frame_pri].view(-1,4)
+            gt=pos_gt_value[pos_frame_gt].view(-1,5)
 
         pos_loc_target=self.encodeBBox__(prior_bbox=pri,bbox=gt[:,0:4])
         pos_loc_pre=loc[pos_frame_pri].view(-1,4)
@@ -462,8 +464,24 @@ class SSD(nn.Module):
         #pos_loc_target, pos_conf_target, pos_loc_pre, pos_conf_pre=0
         return pos_loc_target,pos_conf_target,pos_loc_pre,pos_conf_pre
 
-    def creatNegativeSample(self,distri_frame,conf,neg_cout,neg_all_count):
+    def creatNegativeSample(self,neg_frame,conf,pos_num):
         # code1: evaluate score
+
+
+        neg_nums=pos_num*self.pos_neg_rate
+
+        conf=conf.view(conf.shape[0],-1,self.num_class)
+        neg_frame_conf=neg_frame.unsqueeze(neg_frame.dim()).expand_as(conf)
+        neg=conf[neg_frame_conf].view(-1,self.num_class)
+        scores=neg.softmax(0)[:,0]
+
+        sort=scores.sort(0, descending=True)
+
+        neg_conf_pre=neg[sort.indices[0:neg_nums],:]
+        neg_conf_target=torch.zeros(neg_conf_pre.shape[0])
+
+
+        '''
         scores=torch.zeros(neg_all_count,3)
         neg_conf_target=torch.zeros(self.num_class*neg_cout)
         neg_conf_pre=torch.zeros(self.num_class*neg_cout)
@@ -487,43 +505,60 @@ class SSD(nn.Module):
                 neg_conf_pre[self.num_class*count+j]=conf[batch_id,self.num_class*loc_id+j]
             neg_indics[batch_id].append(loc_id)
             count=count+1
-        return neg_conf_target,neg_conf_pre,neg_indics
+        '''
+        return neg_conf_target,neg_conf_pre
 
     def train(self,data_loader,mode=True):
         # data.DataLoader
+        optimizer = optim.SGD(self.parameters(), lr=0.001, momentum=0.9,
+                              weight_decay=0.0005)
         batch_iterator = iter(data_loader)
         images, targets = next(batch_iterator)
         for i in range(10000):
             self.forward(images)
             pri = self.pri.data
-            loc = self.loc.data
-            conf = self.conf.data
+            loc = self.loc
+            conf = self.conf
             images, targets = next(batch_iterator)
             #print(targets)
 
             pos_frame,pos_gt_value,pos_pri_value,neg_frame=self.creatGlobalIndex(prior_boxes=pri,gt_value=targets)
-
             pos_loc_target,pos_conf_target,pos_loc_pre,pos_conf_pre=self.creatPositiveSample(pos_frame=pos_frame,pos_gt_value=pos_gt_value,pos_pri_value=pos_pri_value,loc=loc,conf=conf)
-
-            neg_conf_target,neg_conf_pre,neg_indics=self.creatNegativeSample(distri_frame=distri_frame,conf=conf,neg_cout=neg_cout,neg_all_count=neg_all_count)
-
-            conf_target=torch.zeros(pos_conf_target.shape[0]+neg_conf_target.shape[0])
-            conf_pre=torch.zeros(pos_conf_pre.shape[0]+neg_conf_pre.shape[0])
-            loc_target=torch.zeros(pos_loc_target.shape)
-            loc_pre=torch.zeros(pos_loc_pre.shape)
+            pos_num = pos_conf_target.shape[0]
+            neg_conf_target,neg_conf_pre=self.creatNegativeSample(neg_frame=neg_frame,conf=conf,pos_num=pos_num)
 
 
-            torch.cat([pos_conf_target,neg_conf_target],0,out=conf_target.data)
-            torch.cat([pos_conf_pre, neg_conf_pre], 0, out=conf_pre.data)
-            torch.cat([pos_loc_target],0,out=loc_target.data)
-            torch.cat([pos_loc_pre],0,out=loc_pre.data)
 
 
-            loss = F.nll_loss(F.log_softmax(conf_pre), conf_target.long()) + F.smooth_l1_loss(loc_pre,loc_target)
+            # conf_target=torch.zeros(pos_conf_target.shape[0]+neg_conf_target.shape[0])
+            # conf_pre=torch.zeros(pos_conf_pre.shape[0]+neg_conf_pre.shape[0])
+            # loc_target=torch.zeros(pos_loc_target.shape)
+            # loc_pre=torch.zeros(pos_loc_pre.shape)
+
+
+            conf_target=torch.cat([pos_conf_target,neg_conf_target],0).long()
+            conf_pre=torch.cat([pos_conf_pre, neg_conf_pre], 0)
+            # loc_target=torch.cat([pos_loc_target],0,out=.data)
+            # loc_pre=torch.cat([pos_loc_pre],0,out=.data)
+
+            optimizer.zero_grad()
+            loss_l = F.smooth_l1_loss(pos_loc_pre, pos_loc_target, size_average=False)
+            loss_c = F.cross_entropy(conf_pre, conf_target.long(), size_average=False)
+
+            N=pos_num
+            loss_c/=N
+            loss_l/=N
+
+            loss=loss_l+loss_c
             loss.backward()
+            print(loss)
+            optimizer.step()
 
-            loc_pred_data_grad = torch.zeros(loc.shape)
-            conf_pred_data_grad = torch.zeros(conf.shape)
+            # loss = F.nll_loss(F.log_softmax(conf_pre), conf_target) + F.smooth_l1_loss(loc_pre,loc_target)
+            # loss.backward()
+            #
+            # loc_pred_data_grad = torch.zeros(loc.shape)
+            # conf_pred_data_grad = torch.zeros(conf.shape)
             '''
             self.reset(all_match_indices_=all_match_indices_, neg_indices=neg_indices,
                        loc_pred_data_grad=loc_pred_data_grad, conf_pred_data_grad=conf_pred_data_grad,
