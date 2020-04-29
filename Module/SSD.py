@@ -554,8 +554,8 @@ class SSD(nn.Module):
             print(loss)
             optimizer.step()
 
-
-            torch.save(self.state_dict(), str(i)+"_ssd_par.pth")
+            if (i%999)==0:
+                torch.save(self.state_dict(), "../tmp/"+str(i)+"_ssd_par.pth")
 
             # loss = F.nll_loss(F.log_softmax(conf_pre), conf_target) + F.smooth_l1_loss(loc_pre,loc_target)
             # loss.backward()
