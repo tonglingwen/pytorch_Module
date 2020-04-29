@@ -515,7 +515,7 @@ class SSD(nn.Module):
         batch_iterator = iter(data_loader)
         images, targets = next(batch_iterator)
         for i in range(10000):
-            self.forward(images)
+            self.forward(images.cuda())
             pri = self.pri.data
             loc = self.loc
             conf = self.conf
@@ -542,8 +542,8 @@ class SSD(nn.Module):
             # loc_pre=torch.cat([pos_loc_pre],0,out=.data)
 
             optimizer.zero_grad()
-            loss_l = F.smooth_l1_loss(pos_loc_pre, pos_loc_target, size_average=False)
-            loss_c = F.cross_entropy(conf_pre, conf_target.long(), size_average=False)
+            loss_l = F.smooth_l1_loss(pos_loc_pre, pos_loc_target.cuda(), size_average=False)
+            loss_c = F.cross_entropy(conf_pre, conf_target.long().cuda(), size_average=False)
 
             N=pos_num
             loss_c/=N
@@ -553,6 +553,9 @@ class SSD(nn.Module):
             loss.backward()
             print(loss)
             optimizer.step()
+
+
+            torch.save(self.state_dict(), str(i)+"_ssd_par.pth")
 
             # loss = F.nll_loss(F.log_softmax(conf_pre), conf_target) + F.smooth_l1_loss(loc_pre,loc_target)
             # loss.backward()
@@ -1068,12 +1071,13 @@ class SSD(nn.Module):
 #prior_data 1*2*7668
 #gt_data    1*1*37*8
 if __name__ == '__main__':
-    ds = voc.VOCDetection('E:\VOC027\VOCdevkit\VOCdevkit',
+    ds = voc.VOCDetection('F:\\voc\\VOCtrainval_11-May-2012\\VOCdevkit',
                           transform=voc.SSDAugmentation())
     data_loader = data.DataLoader(ds, 16, num_workers=4, shuffle=True, collate_fn=voc.detection_collate)
 
     print(time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time())))
     net=SSD()
+    net.cuda()
     #input=torch.rand(3,3,300,300)
     net.train(data_loader=data_loader)
 #make_dot(net(input)).view()
