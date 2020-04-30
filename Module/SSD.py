@@ -320,10 +320,10 @@ class SSD(nn.Module):
 
     def creatGlobalIndex(self,prior_boxes,gt_value):
         with torch.no_grad():
-            pos_frame = torch.zeros((len(gt_value), (int)(prior_boxes.shape[2] / 4)), dtype=torch.uint8)
+            pos_frame = torch.zeros((len(gt_value), (int)(prior_boxes.shape[2] / 4)), dtype=torch.bool)
             pos_gt_value = torch.zeros((len(gt_value), (int)(prior_boxes.shape[2] / 4),5))
             pos_pri_value = torch.zeros((len(gt_value), (int)(prior_boxes.shape[2] / 4), 4))
-            neg_frame = torch.zeros((len(gt_value), (int)(prior_boxes.shape[2] / 4)), dtype=torch.uint8)
+            neg_frame = torch.zeros((len(gt_value), (int)(prior_boxes.shape[2] / 4)), dtype=torch.bool)
 
             pri = prior_boxes[0, 0, :].view(-1, 4)
             for i in range(len(gt_value)):
@@ -551,11 +551,13 @@ class SSD(nn.Module):
 
             loss=loss_l+loss_c
             loss.backward()
-            print(loss)
+            if i%20==0:
+                print(loss)
             optimizer.step()
 
+
             if (i%999)==0:
-                torch.save(self.state_dict(), "../tmp/"+str(i)+"_ssd_par.pth")
+                torch.save(self.state_dict(), "./tmp/"+str(i)+"_ssd_par.pth")
 
             # loss = F.nll_loss(F.log_softmax(conf_pre), conf_target) + F.smooth_l1_loss(loc_pre,loc_target)
             # loss.backward()
@@ -1070,7 +1072,7 @@ class SSD(nn.Module):
 #conf_data  16*40257
 #prior_data 1*2*7668
 #gt_data    1*1*37*8
-if __name__ == '__main__':
+def train():
     ds = voc.VOCDetection('F:\\voc\\VOCtrainval_11-May-2012\\VOCdevkit',
                           transform=voc.SSDAugmentation())
     data_loader = data.DataLoader(ds, 16, num_workers=4, shuffle=True, collate_fn=voc.detection_collate)
