@@ -519,7 +519,7 @@ class SSD(nn.Module):
             pri = self.pri.data
             loc = self.loc
             conf = self.conf
-            images, targets = next(batch_iterator)
+
             #print(targets)
 
             pos_frame,pos_gt_value,pos_pri_value,neg_frame=self.creatGlobalIndex(prior_boxes=pri,gt_value=targets)
@@ -551,6 +551,7 @@ class SSD(nn.Module):
 
             loss=loss_l+loss_c
             loss.backward()
+            images, targets = next(batch_iterator)
             if i%20==0:
                 print(loss)
             optimizer.step()
