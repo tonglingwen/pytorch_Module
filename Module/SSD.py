@@ -551,7 +551,11 @@ class SSD(nn.Module):
 
             loss=loss_l+loss_c
             loss.backward()
-            images, targets = next(batch_iterator)
+            try:
+                images, targets = next(batch_iterator)
+            except StopIteration:
+                batch_iterator=iter(data_loader)
+                images,targets=next(batch_iterator)
             if i%20==0:
                 print(loss)
             optimizer.step()
