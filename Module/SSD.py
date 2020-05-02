@@ -557,7 +557,7 @@ class SSD(nn.Module):
                 batch_iterator=iter(data_loader)
                 images,targets=next(batch_iterator)
             if i%20==0:
-                print(loss)
+                print("loss:",loss.item(),'iterator:',i)
             optimizer.step()
 
 
