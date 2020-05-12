@@ -13,7 +13,7 @@ import numpy as np
 from torchvision import transforms
 import types
 from numpy import random
-
+from PIL import *
 
 def intersect(box_a, box_b):
     max_xy = np.minimum(box_a[:, 2:], box_b[2:])
@@ -524,7 +524,6 @@ class VOCDetection(data.Dataset):
 
     def __getitem__(self, index):
         im, gt, h, w = self.pull_item(index)
-
         return im, gt
 
     def __len__(self):

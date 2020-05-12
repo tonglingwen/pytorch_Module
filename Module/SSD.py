@@ -419,6 +419,26 @@ class SSD(nn.Module):
 
         return res
 
+    def decodeBBox__(self, prior_bbox, encode):
+        res = torch.zeros(encode.shape)
+        prior_width = prior_bbox[:,2] - prior_bbox[:,0]
+        prior_height = prior_bbox[:,3] - prior_bbox[:,1]
+        prior_center_x = (prior_bbox[:,0] + prior_bbox[0,2]) / 2
+        prior_center_y = (prior_bbox[:,1] + prior_bbox[:,3]) / 2
+
+        bbox_center_x=encode[:,0]*self.prior_variances[0]*prior_width+prior_center_x
+        bbox_center_y=encode[:,1]*self.prior_variances[1]*prior_height+prior_center_y
+        bbox_width=encode[:,2].exp()*self.prior_variances[2]*prior_width
+        bbox_height=encode[:,3].exp()*self.prior_variances[3]*prior_height
+
+
+        res[:,0]=(2*bbox_center_x-bbox_width)/2
+        res[:,1]=(2*bbox_center_x+bbox_width)/2
+        res[:,2]=(2*bbox_center_y-bbox_height)/2
+        res[:,3]=(2*bbox_center_y+bbox_height)/2
+
+        return res
+
     def creatPositiveSample(self,pos_frame,pos_gt_value,pos_pri_value,loc,conf):
         loc = loc.view(loc.shape[0], -1, 4)
         conf = conf.view(conf.shape[0], -1, self.num_class)
@@ -508,13 +528,120 @@ class SSD(nn.Module):
         '''
         return neg_conf_target,neg_conf_pre
 
+    def nms(self,boxes, scores, overlap=0.5, top_k=200):
+        keep = scores.new(scores.size(0)).zero_().long()
+        if boxes.numel() == 0:
+            return keep
+        x1 = boxes[:, 0]
+        y1 = boxes[:, 1]
+        x2 = boxes[:, 2]
+        y2 = boxes[:, 3]
+        area = torch.mul(x2 - x1, y2 - y1)
+        v, idx = scores.sort(0)  # sort in ascending order
+        # I = I[v >= 0.01]
+        idx = idx[-top_k:]  # indices of the top-k largest vals
+        xx1 = boxes.new()
+        yy1 = boxes.new()
+        xx2 = boxes.new()
+        yy2 = boxes.new()
+        w = boxes.new()
+        h = boxes.new()
+
+        # keep = torch.Tensor()
+        count = 0
+        while idx.numel() > 0:
+            i = idx[-1]  # index of current largest val
+            # keep.append(i)
+            keep[count] = i
+            count += 1
+            if idx.size(0) == 1:
+                break
+            idx = idx[:-1]  # remove kept element from view
+            # load bboxes of next highest vals
+            torch.index_select(x1, 0, idx, out=xx1)
+            torch.index_select(y1, 0, idx, out=yy1)
+            torch.index_select(x2, 0, idx, out=xx2)
+            torch.index_select(y2, 0, idx, out=yy2)
+            # store element-wise max with next highest score
+            xx1 = torch.clamp(xx1, min=x1[i])
+            yy1 = torch.clamp(yy1, min=y1[i])
+            xx2 = torch.clamp(xx2, max=x2[i])
+            yy2 = torch.clamp(yy2, max=y2[i])
+            w.resize_as_(xx2)
+            h.resize_as_(yy2)
+            w = xx2 - xx1
+            h = yy2 - yy1
+            # check sizes of xx1 and xx2.. after each iteration
+            w = torch.clamp(w, min=0.0)
+            h = torch.clamp(h, min=0.0)
+            inter = w * h
+            # IoU = i / (area(a) + area(b) - i)
+            rem_areas = torch.index_select(area, 0, idx)  # load remaining areas)
+            union = (rem_areas - inter) + area[i]
+            IoU = inter / union  # store result in iou
+            # keep only elements with an IoU <= overlap
+            idx = idx[IoU.le(overlap)]
+        return keep, count
+
+    def test(self,data_loader,mode=True):
+
+        # num_images = len(data_loader)
+        # for i in range(num_images):
+        #     print('Testing image {:d}/{:d}....'.format(i + 1, num_images))
+        #     img = data_loader.pull_image(i)
+        #     img_id, annotation = data_loader.pull_anno(i)
+        #     # x = torch.from_numpy(transform(img)[0]).permute(2, 0, 1)
+        #     # x = Variable(x.unsqueeze(0))
+
+        batch_iterator = iter(data_loader)
+        images, targets = next(batch_iterator)
+        for i in range(300):
+            self.forward(images)
+            pri = self.pri.data[0,0,:].view(-1, 4)
+            loc = self.loc.data
+            conf = self.conf.data
+
+            loc = loc.view(loc.shape[0], -1, 4)
+            conf = conf.view(conf.shape[0], -1, self.num_class)
+            conf=F.softmax(conf,dim=-1)
+
+            num = loc.size(0)  # batch size
+            num_priors = pri.size(0)
+            output = torch.zeros(num, self.num_class, 200, 5)
+            conf_preds = conf.transpose(2, 1)
+
+        # Decode predictions into bboxes.
+            for i in range(num):
+                decoded_boxes = self.decodeBBox__(pri,loc[i])
+                # For each class, perform nms
+                conf_scores = conf_preds[i].clone()
+
+                for cl in range(1, self.num_class):
+                    c_mask = conf_scores[cl].gt(0.01)
+                    scores = conf_scores[cl][c_mask]
+                    if scores.size(0) == 0:
+                        continue
+                    l_mask = c_mask.unsqueeze(1).expand_as(decoded_boxes)
+                    boxes = decoded_boxes[l_mask].view(-1, 4)
+                    # idx of highest scoring and non-overlapping boxes per class
+                    ids, count = self.nms(boxes, scores)
+                    output[i, cl, :count] = \
+                        torch.cat((scores[ids[:count]].unsqueeze(1),
+                                boxes[ids[:count]]), 1)
+            flt = output.contiguous().view(num, -1, 5)
+            _, idx = flt[:, :, 0].sort(1, descending=True)
+            _, rank = idx.sort(1)
+            flt[(rank < 200).unsqueeze(-1).expand_as(flt)].fill_(0)
+            return output
+        return
+
     def train(self,data_loader,mode=True):
         # data.DataLoader
         optimizer = optim.SGD(self.parameters(), lr=0.001, momentum=0.9,
                               weight_decay=0.0005)
         batch_iterator = iter(data_loader)
         images, targets = next(batch_iterator)
-        for i in range(10000):
+        for i in range(120000):
             self.forward(images.cuda())
             pri = self.pri.data
             loc = self.loc
@@ -1078,8 +1205,9 @@ class SSD(nn.Module):
 #prior_data 1*2*7668
 #gt_data    1*1*37*8
 def train():
-    ds = voc.VOCDetection('F:\\voc\\VOCtrainval_11-May-2012\\VOCdevkit',
+    ds = voc.VOCDetection('E:\VOC027\VOCdevkit\VOCdevkit',
                           transform=voc.SSDAugmentation())
+    num_images = len(ds)
     data_loader = data.DataLoader(ds, 16, num_workers=4, shuffle=True, collate_fn=voc.detection_collate)
 
     print(time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time())))
@@ -1096,3 +1224,14 @@ def train():
     print(time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time())))
 
 
+def test():
+    net=SSD()
+    net.load_state_dict(torch.load('E:\VOC027\ssd_par.pth',map_location='cpu'))
+
+    ds = voc.VOCDetection('E:\VOC027\VOCdevkit',
+                          [('2007', 'test')],transform=voc.BaseTransform(300,(104, 117, 123)))
+    num_images = len(ds)
+    data_loader = data.DataLoader(ds, 16, num_workers=4, shuffle=True, collate_fn=voc.detection_collate)
+    #net.cuda()
+
+    net.test(data_loader=data_loader)
