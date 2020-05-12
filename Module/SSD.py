@@ -583,6 +583,44 @@ class SSD(nn.Module):
             idx = idx[IoU.le(overlap)]
         return keep, count
 
+    def detection(self):
+        pri = self.pri.data[0, 0, :].view(-1, 4)
+        loc = self.loc.data
+        conf = self.conf.data
+
+        loc = loc.view(loc.shape[0], -1, 4)
+        conf = conf.view(conf.shape[0], -1, self.num_class)
+        conf = F.softmax(conf, dim=-1)
+
+        num = loc.size(0)  # batch size
+        num_priors = pri.size(0)
+        output = torch.zeros(num, self.num_class, 200, 5)
+        conf_preds = conf.transpose(2, 1)
+
+        # Decode predictions into bboxes.
+        for i in range(num):
+            decoded_boxes = self.decodeBBox__(pri, loc[i])
+            # For each class, perform nms
+            conf_scores = conf_preds[i].clone()
+
+            for cl in range(1, self.num_class):
+                c_mask = conf_scores[cl].gt(0.01)
+                scores = conf_scores[cl][c_mask]
+                if scores.size(0) == 0:
+                    continue
+                l_mask = c_mask.unsqueeze(1).expand_as(decoded_boxes)
+                boxes = decoded_boxes[l_mask].view(-1, 4)
+                # idx of highest scoring and non-overlapping boxes per class
+                ids, count = self.nms(boxes, scores)
+                output[i, cl, :count] = \
+                    torch.cat((scores[ids[:count]].unsqueeze(1),
+                               boxes[ids[:count]]), 1)
+        flt = output.contiguous().view(num, -1, 5)
+        _, idx = flt[:, :, 0].sort(1, descending=True)
+        _, rank = idx.sort(1)
+        flt[(rank < 200).unsqueeze(-1).expand_as(flt)].fill_(0)
+        return output
+
     def test(self,data_loader,mode=True):
 
         # num_images = len(data_loader)
@@ -595,44 +633,19 @@ class SSD(nn.Module):
 
         batch_iterator = iter(data_loader)
         images, targets = next(batch_iterator)
+        img2 = transforms.ToPILImage()(images[0])
+        img2.show()
         for i in range(300):
             self.forward(images)
-            pri = self.pri.data[0,0,:].view(-1, 4)
-            loc = self.loc.data
-            conf = self.conf.data
-
-            loc = loc.view(loc.shape[0], -1, 4)
-            conf = conf.view(conf.shape[0], -1, self.num_class)
-            conf=F.softmax(conf,dim=-1)
-
-            num = loc.size(0)  # batch size
-            num_priors = pri.size(0)
-            output = torch.zeros(num, self.num_class, 200, 5)
-            conf_preds = conf.transpose(2, 1)
-
-        # Decode predictions into bboxes.
-            for i in range(num):
-                decoded_boxes = self.decodeBBox__(pri,loc[i])
-                # For each class, perform nms
-                conf_scores = conf_preds[i].clone()
-
-                for cl in range(1, self.num_class):
-                    c_mask = conf_scores[cl].gt(0.01)
-                    scores = conf_scores[cl][c_mask]
-                    if scores.size(0) == 0:
-                        continue
-                    l_mask = c_mask.unsqueeze(1).expand_as(decoded_boxes)
-                    boxes = decoded_boxes[l_mask].view(-1, 4)
-                    # idx of highest scoring and non-overlapping boxes per class
-                    ids, count = self.nms(boxes, scores)
-                    output[i, cl, :count] = \
-                        torch.cat((scores[ids[:count]].unsqueeze(1),
-                                boxes[ids[:count]]), 1)
-            flt = output.contiguous().view(num, -1, 5)
-            _, idx = flt[:, :, 0].sort(1, descending=True)
-            _, rank = idx.sort(1)
-            flt[(rank < 200).unsqueeze(-1).expand_as(flt)].fill_(0)
-            return output
+            detections=self.detection()
+            for n in range(detections.size(1)):
+                j = 0
+                while detections[0, n, j, 0] >= 0.6:
+                    pt = (detections[0, n, j, 1:]*300).cpu().numpy()
+                    score = detections[0, n, j, 0]
+                    print(pt[0],pt[1],pt[2],pt[3],score)
+                    j+=1
+            return
         return
 
     def train(self,data_loader,mode=True):
@@ -641,6 +654,10 @@ class SSD(nn.Module):
                               weight_decay=0.0005)
         batch_iterator = iter(data_loader)
         images, targets = next(batch_iterator)
+        for i in range(16):
+            img2 = transforms.ToPILImage()(images[i,:,:,:])
+            img2.save(str(i)+".jpg")
+        #img2.show()
         for i in range(120000):
             self.forward(images.cuda())
             pri = self.pri.data
@@ -1205,7 +1222,7 @@ class SSD(nn.Module):
 #prior_data 1*2*7668
 #gt_data    1*1*37*8
 def train():
-    ds = voc.VOCDetection('E:\VOC027\VOCdevkit\VOCdevkit',
+    ds = voc.VOCDetection('F:\\voc\VOCtrainval_11-May-2012\VOCdevkit',
                           transform=voc.SSDAugmentation())
     num_images = len(ds)
     data_loader = data.DataLoader(ds, 16, num_workers=4, shuffle=True, collate_fn=voc.detection_collate)
@@ -1226,9 +1243,9 @@ def train():
 
 def test():
     net=SSD()
-    net.load_state_dict(torch.load('E:\VOC027\ssd_par.pth',map_location='cpu'))
+    net.load_state_dict(torch.load('F:\\voc\ssd_par.pth',map_location='cpu'))
 
-    ds = voc.VOCDetection('E:\VOC027\VOCdevkit',
+    ds = voc.VOCDetection('F:\\voc\VOCtest_06-Nov-2007\VOCdevkit',
                           [('2007', 'test')],transform=voc.BaseTransform(300,(104, 117, 123)))
     num_images = len(ds)
     data_loader = data.DataLoader(ds, 16, num_workers=4, shuffle=True, collate_fn=voc.detection_collate)
