@@ -176,10 +176,13 @@ class SSD(nn.Module):
         re = F.relu(self.batchnor21(self.conv21(re)))
         re = F.relu(self.batchnor22(self.conv22(re)))
         node1 = F.relu(self.batchnor23_node1(self.conv23_node1(re)))
+
+
         re = F.relu(self.batchnor24(self.conv24(node1)))
         re = F.relu(self.batchnor25(self.conv25(re)))
         re = F.relu(self.batchnor26(self.conv26(re)))
         node2 = F.relu(self.batchnor27_node2(self.conv27_node2(re)))
+
         re = F.relu(self.batchnor28(self.conv28(node2)))
         node3 = F.relu(self.batchnor29_node3(self.conv29_node3(re)))
         re = F.relu(self.batchnor30(self.conv30(node3)))
@@ -1221,6 +1224,13 @@ class SSD(nn.Module):
 #conf_data  16*40257
 #prior_data 1*2*7668
 #gt_data    1*1*37*8
+
+net=SSD()
+
+
+summary(net, input_size=(3, 300, 300),device='cpu')
+
+
 def train():
     ds = voc.VOCDetection('F:\\voc\VOCtrainval_11-May-2012\VOCdevkit',
                           transform=voc.SSDAugmentation())
