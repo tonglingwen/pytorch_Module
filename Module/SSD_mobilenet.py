@@ -29,9 +29,6 @@ class SSD_mobilenet(nn.Module):
 
         self.basenet=mobile.MobileNet()
 
-        for name, value in self.basenet.named_parameters():
-            value.requires_grad = False
-
         self.conv28=nn.Conv2d(1024,256,1)
         self.batchnor28=nn.BatchNorm2d(256)
 
@@ -417,8 +414,14 @@ class SSD_mobilenet(nn.Module):
     def train(self,data_loader,mode=True):
         # data.DataLoader
 
-        self.basenet.load_state_dict(torch.load(r'my_mobile.pth'),strict=False)
 
+
+        self.basenet.load_state_dict(torch.load(r'/voc/my_mobile.pth'),strict=False)
+
+
+
+        for name, value in self.basenet.named_parameters():
+            value.requires_grad = False
 
         #sp=self.parameters()
 
@@ -431,7 +434,7 @@ class SSD_mobilenet(nn.Module):
         #     img2 = transforms.ToPILImage()(images[i,:,:,:])
         #     img2.save(str(i)+".jpg")
 
-        for i in range(120000):
+        for i in range(120000*20):
             mk = self.basenet.state_dict()
             mk1 = self.state_dict()
             self.forward(images.cuda())
@@ -588,12 +591,13 @@ class SSD_mobilenet(nn.Module):
 
 
 def train():
-    ds = voc.VOCDetection(r'F:\ml-dataset\voc\VOCtrainval_11-May-2012\VOCdevkit',
+    ds = voc.VOCDetection(r'/voc/VOCdevkit',
                           transform=voc.SSDAugmentation())
-    data_loader = data.DataLoader(ds, 16, num_workers=4, shuffle=True, collate_fn=voc.detection_collate)
+    data_loader = data.DataLoader(ds, 16, num_workers=1, shuffle=True, collate_fn=voc.detection_collate)
 
 
     net=SSD_mobilenet()
+    #net.load_state_dict(torch.load(r'/app/pytorch_Module/tmp/0_ssd_par.pth'))
     net.cuda()
     net.train(data_loader=data_loader)
 

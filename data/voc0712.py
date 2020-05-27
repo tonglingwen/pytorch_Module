@@ -115,8 +115,11 @@ class Resize(object):
         self.size = size
 
     def __call__(self, image, boxes=None, labels=None):
+        type=image.dtype
+        image = image.astype(np.uint8)
         image = cv2.resize(image, (self.size,
                                  self.size))
+        image=image.astype(type)
         return image, boxes, labels
 
 
@@ -418,10 +421,11 @@ class SSDAugmentation(object):
             RandomSampleCrop(),
             RandomMirror(),
             ToPercentCoords(),
-            Resize(self.size),
-            SubtractMeans(self.mean)
+            Resize(self.size)
+            #SubtractMeans(self.mean)
         ])
-
+    # normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+    #                                  std=[0.229, 0.224, 0.225])
     def __call__(self, img, boxes, labels):
         #self.augment(img, boxes, labels)
         return self.augment(img, boxes, labels)
@@ -544,9 +548,11 @@ class VOCDetection(data.Dataset):
             img, boxes, labels = self.transform(img, target[:, :4], target[:, 4])
             # to rgb
             img = img[:, :, (2, 1, 0)]
+            img=torch.from_numpy(img).permute(2, 0, 1)/255
+            img = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])(img)
             # img = img.transpose(2, 0, 1)
             target = np.hstack((boxes, np.expand_dims(labels, axis=1)))
-        return torch.from_numpy(img).permute(2, 0, 1), target, height, width
+        return img, target, height, width
         # return torch.from_numpy(img), target, height, width
 
     def pull_image(self, index):

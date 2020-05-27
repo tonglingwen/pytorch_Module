@@ -100,7 +100,7 @@ def accuracy(output, target, topk=(1,)):
 
 def imagetest2():
     net=MobileNet()
-    net.load_state_dict(torch.load(r'E:\Work\pytorch\pytorch_Module\Module\my_mobile.pth'))
+    net.load_state_dict(torch.load(r'E:\Work\pytorch\pytorch_Module\Module\my_mobile.pth'),strict=False)
     net.eval()
     net=net.cuda()
 
